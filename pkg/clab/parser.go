@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -60,6 +62,9 @@ func ParseTopologyFile(path string) (*Topology, string, error) {
 		return nil, "", fmt.Errorf("failed to decode containerlab topology in %q: %w", path, err)
 	}
 
+	topoDir := filepath.Dir(path)
+	topo.Name = ExpandGitVariables(topo.Name, topoDir)
+
 	// Validate Topology
 	if err := validateTopology(&topo); err != nil {
 		return nil, "", err
@@ -84,6 +89,61 @@ func inspectNode(node *yaml.Node, currentDepth int, aliasCount *int) error {
 		}
 	}
 	return nil
+}
+
+var gitCmdFn = func(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	return cmd.Output()
+}
+
+// ExpandMagicVariables replaces containerlab magic variables with their runtime values.
+func ExpandMagicVariables(s string, labName, nodeName string) string {
+	clabDir := fmt.Sprintf("clab-%s", labName)
+	clabNodeDir := fmt.Sprintf("clab-%s/%s", labName, nodeName)
+
+	replacer := strings.NewReplacer(
+		"__clabNodeDir__", clabNodeDir,
+		"__clabDir__", clabDir,
+		"__clabNodeName__", nodeName,
+		"__clabLabName__", labName,
+	)
+	return replacer.Replace(s)
+}
+
+// ExpandGitVariables expands __gitBranch__ and __gitHash__ in the given string using git if available.
+func ExpandGitVariables(name string, dir string) string {
+	if !strings.Contains(name, "__gitBranch__") && !strings.Contains(name, "__gitHash__") {
+		return name
+	}
+
+	branch := "none"
+	hash := "none"
+
+	bOut, err := gitCmdFn(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err == nil {
+		b := strings.TrimSpace(string(bOut))
+		if b != "" && b != "HEAD" {
+			b = strings.ReplaceAll(b, "/", "-")
+			branch = strings.ToLower(b)
+		} else if b == "HEAD" {
+			branch = "head"
+		}
+	}
+
+	hOut, err := gitCmdFn(dir, "rev-parse", "--short", "HEAD")
+	if err == nil {
+		h := strings.TrimSpace(string(hOut))
+		if h != "" {
+			hash = strings.ToLower(h)
+		}
+	}
+
+	name = strings.ReplaceAll(name, "__gitBranch__", branch)
+	name = strings.ReplaceAll(name, "__gitHash__", hash)
+	return name
 }
 
 func validateTopology(t *Topology) error {
@@ -111,25 +171,6 @@ func validateTopology(t *Topology) error {
 		}
 		if node == nil {
 			return fmt.Errorf("node %q definition is empty", nodeName)
-		}
-		if node.Kind == "" && node.Image == "" {
-			return fmt.Errorf("node %q requires at least 'kind' or 'image'", nodeName)
-		}
-	}
-
-	for i, link := range t.Topology.Links {
-		if len(link.Endpoints) != 2 {
-			return fmt.Errorf("link #%d must have exactly 2 endpoints, got %d (%v)", i+1, len(link.Endpoints), link.Endpoints)
-		}
-		for _, ep := range link.Endpoints {
-			parts := strings.Split(ep, ":")
-			if len(parts) != 2 {
-				return fmt.Errorf("link #%d endpoint %q is invalid, expected 'node:interface'", i+1, ep)
-			}
-			nodeName := parts[0]
-			if _, exists := t.Topology.Nodes[nodeName]; !exists {
-				return fmt.Errorf("link #%d references undefined node %q", i+1, nodeName)
-			}
 		}
 	}
 

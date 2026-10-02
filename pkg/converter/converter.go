@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"c9s/pkg/crd"
 	"c9s/pkg/safeguards"
 
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -59,37 +61,73 @@ func Convert(parsed *clab.Topology, topoDir, rawYaml string) (*Result, error) {
 	}
 
 	var entries []configEntry
+	resolvedConfigs := make(map[string]string)
 	totalBytes := 0
 
 	// Sort node names deterministically
 	var sortedNodes []string
-	for nodeName, node := range parsed.Topology.Nodes {
-		if node != nil && node.StartupConfig != "" {
-			sortedNodes = append(sortedNodes, nodeName)
-		}
+	for nodeName := range parsed.Topology.Nodes {
+		sortedNodes = append(sortedNodes, nodeName)
 	}
 	sort.Strings(sortedNodes)
 
 	for _, nodeName := range sortedNodes {
 		node := parsed.Topology.Nodes[nodeName]
+		if node == nil {
+			continue
+		}
+
+		// 1. Resolve effective kind
+		effectiveKind := ""
+		if node.Kind != "" {
+			effectiveKind = node.Kind
+		} else if node.Group != "" && parsed.Topology.Groups != nil && parsed.Topology.Groups[node.Group] != nil && parsed.Topology.Groups[node.Group].Kind != "" {
+			effectiveKind = parsed.Topology.Groups[node.Group].Kind
+		} else if parsed.Topology.Defaults != nil && parsed.Topology.Defaults.Kind != "" {
+			effectiveKind = parsed.Topology.Defaults.Kind
+		}
+
+		if node.Kind == "" && effectiveKind != "" {
+			node.Kind = effectiveKind
+		}
+
+		// 2. Resolve effective startup-config
+		effectiveStartupConfig := ""
+		if node.StartupConfig != "" {
+			effectiveStartupConfig = node.StartupConfig
+		} else if node.Group != "" && parsed.Topology.Groups != nil && parsed.Topology.Groups[node.Group] != nil && parsed.Topology.Groups[node.Group].StartupConfig != "" {
+			effectiveStartupConfig = parsed.Topology.Groups[node.Group].StartupConfig
+		} else if effectiveKind != "" && parsed.Topology.Kinds != nil && parsed.Topology.Kinds[effectiveKind] != nil && parsed.Topology.Kinds[effectiveKind].StartupConfig != "" {
+			effectiveStartupConfig = parsed.Topology.Kinds[effectiveKind].StartupConfig
+		} else if parsed.Topology.Defaults != nil && parsed.Topology.Defaults.StartupConfig != "" {
+			effectiveStartupConfig = parsed.Topology.Defaults.StartupConfig
+		}
+
+		if effectiveStartupConfig == "" {
+			continue
+		}
+
+		// Expand magic variables in the startup-config
+		expandedConfig := clab.ExpandMagicVariables(effectiveStartupConfig, parsed.Name, nodeName)
+
 		var data []byte
 		var filename string
 		var filePath string
 
-		if strings.Contains(node.StartupConfig, "\n") {
+		if strings.Contains(expandedConfig, "\n") {
 			// Inline configuration multiline string
-			data = []byte(node.StartupConfig)
+			data = []byte(expandedConfig)
 			filename = fmt.Sprintf("%s.cfg", nodeName)
 			filePath = filename
 		} else {
 			// External file path
 			var err error
-			data, err = safeguards.SafeReadConfigFile(topoDir, node.StartupConfig)
+			data, err = safeguards.SafeReadConfigFile(topoDir, expandedConfig)
 			if err != nil {
 				return nil, fmt.Errorf("node %q startup-config error: %w", nodeName, err)
 			}
-			filename = filepath.Base(node.StartupConfig)
-			filePath = node.StartupConfig
+			filename = filepath.Base(expandedConfig)
+			filePath = expandedConfig
 		}
 
 		if len(data) > maxConfigMapBytes {
@@ -105,6 +143,7 @@ func Convert(parsed *clab.Topology, topoDir, rawYaml string) (*Result, error) {
 			filePath: filePath,
 			data:     data,
 		})
+		resolvedConfigs[nodeName] = filePath
 		totalBytes += len(data)
 	}
 
@@ -199,6 +238,8 @@ func Convert(parsed *clab.Topology, topoDir, rawYaml string) (*Result, error) {
 		}
 	}
 
+	resolvedYaml := resolveContainerlabYaml(rawYaml, resolvedConfigs)
+
 	// 3. Topology Custom Resource
 	topoCR := &crd.Topology{
 		TypeMeta: metav1.TypeMeta{
@@ -217,7 +258,7 @@ func Convert(parsed *clab.Topology, topoDir, rawYaml string) (*Result, error) {
 		},
 		Spec: crd.TopologySpec{
 			Definition: crd.TopologyDefinitionSpec{
-				Containerlab: rawYaml,
+				Containerlab: resolvedYaml,
 			},
 			Deployment: crd.TopologyDeploymentSpec{
 				FilesFromConfigMap: filesFromCM,
@@ -231,4 +272,126 @@ func Convert(parsed *clab.Topology, topoDir, rawYaml string) (*Result, error) {
 		ConfigMaps: configMaps,
 		TopologyCR: topoCR,
 	}, nil
+}
+
+func findMapValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func setMapKey(node *yaml.Node, key, value string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1].Kind = yaml.ScalarNode
+			node.Content[i+1].Tag = "!!str"
+			node.Content[i+1].Value = value
+			return
+		}
+	}
+	keyNode := &yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!str",
+		Value: key,
+	}
+	valNode := &yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!str",
+		Value: value,
+	}
+	node.Content = append(node.Content, keyNode, valNode)
+}
+
+func deleteMapKey(node *yaml.Node, key string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	newContent := make([]*yaml.Node, 0, len(node.Content))
+	for i := 0; i < len(node.Content)-1; i += 2 {
+		if node.Content[i].Value == key {
+			continue
+		}
+		newContent = append(newContent, node.Content[i], node.Content[i+1])
+	}
+	node.Content = newContent
+}
+
+func resolveContainerlabYaml(rawYaml string, resolvedConfigs map[string]string) string {
+	if len(resolvedConfigs) == 0 {
+		return rawYaml
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(rawYaml), &doc); err != nil {
+		return rawYaml
+	}
+
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return rawYaml
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return rawYaml
+	}
+
+	topoMap := findMapValue(root, "topology")
+	if topoMap == nil || topoMap.Kind != yaml.MappingNode {
+		return rawYaml
+	}
+
+	// 1. Update or set startup-config for each node in topology -> nodes
+	nodesMap := findMapValue(topoMap, "nodes")
+	if nodesMap != nil && nodesMap.Kind == yaml.MappingNode {
+		for i := 0; i < len(nodesMap.Content)-1; i += 2 {
+			nodeKey := nodesMap.Content[i]
+			nodeVal := nodesMap.Content[i+1]
+			nodeName := nodeKey.Value
+			if cfg, ok := resolvedConfigs[nodeName]; ok {
+				if nodeVal.Kind != yaml.MappingNode {
+					nodeVal.Kind = yaml.MappingNode
+					nodeVal.Tag = "!!map"
+					nodeVal.Content = nil
+				}
+				setMapKey(nodeVal, "startup-config", cfg)
+			}
+		}
+	}
+
+	// 2. Clean up any template/inherited startup-config keys under defaults, kinds, groups
+	if defaultsMap := findMapValue(topoMap, "defaults"); defaultsMap != nil {
+		deleteMapKey(defaultsMap, "startup-config")
+	}
+
+	if kindsMap := findMapValue(topoMap, "kinds"); kindsMap != nil && kindsMap.Kind == yaml.MappingNode {
+		for i := 1; i < len(kindsMap.Content); i += 2 {
+			kindVal := kindsMap.Content[i]
+			deleteMapKey(kindVal, "startup-config")
+		}
+	}
+
+	if groupsMap := findMapValue(topoMap, "groups"); groupsMap != nil && groupsMap.Kind == yaml.MappingNode {
+		for i := 1; i < len(groupsMap.Content); i += 2 {
+			groupVal := groupsMap.Content[i]
+			deleteMapKey(groupVal, "startup-config")
+		}
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return rawYaml
+	}
+	_ = enc.Close()
+
+	return buf.String()
 }

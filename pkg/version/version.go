@@ -7,7 +7,7 @@ import (
 
 var (
 	// Version is the current version of the c9s CLI tool.
-	Version = "0.0.1"
+	Version = "0.0.2"
 	// Commit holds the git commit hash set at build time.
 	Commit = "unknown"
 	// Date holds the build timestamp set at build time.

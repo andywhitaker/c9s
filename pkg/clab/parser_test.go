@@ -84,32 +84,6 @@ topology:
 			wantErr: true,
 		},
 		{
-			name: "invalid link endpoints",
-			yaml: `
-name: bad-link
-topology:
-  nodes:
-    node1:
-      kind: linux
-  links:
-    - endpoints: ["node1:eth1"]
-`,
-			wantErr: true,
-		},
-		{
-			name: "undefined node in link",
-			yaml: `
-name: ghost-node
-topology:
-  nodes:
-    node1:
-      kind: linux
-  links:
-    - endpoints: ["node1:eth1", "ghost:eth1"]
-`,
-			wantErr: true,
-		},
-		{
 			name: "invalid node name uppercase",
 			yaml: `
 name: valid-lab
@@ -164,6 +138,32 @@ topology:
 `,
 			wantErr: true,
 		},
+		{
+			name: "pass-through link endpoints and undefined node in link allowed",
+			yaml: `
+name: passthrough-lab
+topology:
+  nodes:
+    node1:
+      kind: linux
+  links:
+    - endpoints: ["node1:eth1", "external:eth1"]
+    - endpoints: ["single-endpoint"]
+`,
+			wantErr: false,
+		},
+		{
+			name: "node without direct kind or image allowed (pass-through to defaults/kinds/groups)",
+			yaml: `
+name: passthrough-node
+topology:
+  defaults:
+    kind: linux
+  nodes:
+    node1: {}
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -177,5 +177,152 @@ topology:
 				t.Errorf("ParseTopologyFile() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseTopologyWithDefaultsKindsGroups(t *testing.T) {
+	yamlContent := `
+name: multi-tier-lab
+topology:
+  defaults:
+    kind: linux
+    image: alpine:latest
+  kinds:
+    nokia_srlinux:
+      image: ghcr.io/nokia/srlinux:latest
+      type: ixr6
+  groups:
+    spine:
+      kind: nokia_srlinux
+    leaf:
+      kind: linux
+  nodes:
+    spine1:
+      group: spine
+    leaf1:
+      group: leaf
+    worker1: {}
+`
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "topo.clab.yml")
+	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, _, err := ParseTopologyFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error parsing topology with defaults, kinds, and groups: %v", err)
+	}
+
+	if parsed.Name != "multi-tier-lab" {
+		t.Errorf("expected name 'multi-tier-lab', got %q", parsed.Name)
+	}
+	if parsed.Topology.Defaults == nil || parsed.Topology.Defaults.Kind != "linux" {
+		t.Errorf("defaults not parsed properly: %+v", parsed.Topology.Defaults)
+	}
+	if len(parsed.Topology.Kinds) != 1 || parsed.Topology.Kinds["nokia_srlinux"].Type != "ixr6" {
+		t.Errorf("kinds not parsed properly: %+v", parsed.Topology.Kinds)
+	}
+	if len(parsed.Topology.Groups) != 2 {
+		t.Errorf("expected 2 groups, got %d", len(parsed.Topology.Groups))
+	}
+	if parsed.Topology.Nodes["spine1"].Group != "spine" {
+		t.Errorf("expected spine1 group 'spine', got %q", parsed.Topology.Nodes["spine1"].Group)
+	}
+	if parsed.Topology.Nodes["leaf1"].Group != "leaf" {
+		t.Errorf("expected leaf1 group 'leaf', got %q", parsed.Topology.Nodes["leaf1"].Group)
+	}
+}
+
+func TestExpandMagicVariables(t *testing.T) {
+	labName := "testlab"
+	nodeName := "router1"
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "configs/__clabNodeName__.cfg",
+			expected: "configs/router1.cfg",
+		},
+		{
+			input:    "__clabDir__/configs/__clabNodeName__.cfg",
+			expected: "clab-testlab/configs/router1.cfg",
+		},
+		{
+			input:    "__clabNodeDir__/startup.cfg",
+			expected: "clab-testlab/router1/startup.cfg",
+		},
+		{
+			input:    "__clabLabName__-__clabNodeName__.cfg",
+			expected: "testlab-router1.cfg",
+		},
+		{
+			input:    "all: __clabNodeDir__ on __clabDir__ for __clabLabName__ and __clabNodeName__",
+			expected: "all: clab-testlab/router1 on clab-testlab for testlab and router1",
+		},
+	}
+
+	for _, tt := range tests {
+		actual := ExpandMagicVariables(tt.input, labName, nodeName)
+		if actual != tt.expected {
+			t.Errorf("ExpandMagicVariables(%q) = %q, want %q", tt.input, actual, tt.expected)
+		}
+	}
+}
+
+func TestExpandGitVariables(t *testing.T) {
+	origGitCmd := gitCmdFn
+	defer func() { gitCmdFn = origGitCmd }()
+
+	// 1. Mock git available with branch containing slashes
+	gitCmdFn = func(dir string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+			return []byte("Feature/Cool-Feature\n"), nil
+		}
+		if len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--short" {
+			return []byte("a1b2c3d\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+
+	res := ExpandGitVariables("lab-__gitBranch__-__gitHash__", "/any/dir")
+	expected := "lab-feature-cool-feature-a1b2c3d"
+	if res != expected {
+		t.Errorf("expected %q, got %q", expected, res)
+	}
+
+	// 2. Mock git unavailable (fallback to "none")
+	gitCmdFn = func(dir string, args ...string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+
+	resFallback := ExpandGitVariables("lab-__gitBranch__-__gitHash__", "/any/dir")
+	expectedFallback := "lab-none-none"
+	if resFallback != expectedFallback {
+		t.Errorf("expected %q, got %q", expectedFallback, resFallback)
+	}
+
+	// 3. End-to-end via ParseTopologyFile
+	tmpDir := t.TempDir()
+	topoPath := filepath.Join(tmpDir, "topo.clab.yml")
+	content := `
+name: ci-__gitBranch__
+topology:
+  nodes:
+    node1:
+      kind: linux
+`
+	if err := os.WriteFile(topoPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, _, err := ParseTopologyFile(topoPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.Name != "ci-none" {
+		t.Errorf("expected name 'ci-none', got %q", parsed.Name)
 	}
 }

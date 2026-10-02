@@ -17,14 +17,16 @@ type MgmtConfig struct {
 
 // TopologyDefinition holds nodes and links.
 type TopologyDefinition struct {
-	Defaults *NodeDefinition           `yaml:"defaults,omitempty"`
+	Defaults *NodeDefinition            `yaml:"defaults,omitempty"`
 	Kinds    map[string]*NodeDefinition `yaml:"kinds,omitempty"`
+	Groups   map[string]*NodeDefinition `yaml:"groups,omitempty"`
 	Nodes    map[string]*NodeDefinition `yaml:"nodes"`
-	Links    []LinkDefinition          `yaml:"links,omitempty"`
+	Links    []LinkDefinition           `yaml:"links,omitempty"`
 }
 
 // NodeDefinition models a containerlab node.
 type NodeDefinition struct {
+	Group         string            `yaml:"group,omitempty"`
 	Kind          string            `yaml:"kind,omitempty"`
 	Image         string            `yaml:"image,omitempty"`
 	StartupConfig string            `yaml:"startup-config,omitempty"`
