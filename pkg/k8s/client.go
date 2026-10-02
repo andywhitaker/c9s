@@ -22,17 +22,20 @@ import (
 )
 
 var (
-	topologyGVR = schema.GroupVersionResource{
+	TopologyGVR = schema.GroupVersionResource{
 		Group:    crd.GroupName,
 		Version:  crd.GroupVersion,
 		Resource: "topologies",
 	}
 
-	nodeGVR = schema.GroupVersionResource{
+	NodeGVR = schema.GroupVersionResource{
 		Group:    crd.GroupName,
 		Version:  crd.GroupVersion,
 		Resource: "nodes",
 	}
+
+	topologyGVR = TopologyGVR
+	nodeGVR     = NodeGVR
 )
 
 // Client wraps Kubernetes typed and dynamic clients with strict safety checks.

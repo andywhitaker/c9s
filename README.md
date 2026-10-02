@@ -1,73 +1,97 @@
-# c9s - Containerlab on Kubernetes
+# c9s
 
-`c9s` is a command-line tool designed to convert [Containerlab](https://containerlab.dev) topologies into [Clabernetes](https://c9s.run) Custom Resource Definitions (`c9s.run/v1alpha1`) and manage their deployment lifecycle directly on Kubernetes.
+`c9s` is a command-line tool for deploying and managing [Containerlab](https://containerlab.dev) topologies on Kubernetes using [Clabernetes](https://c9s.run).
 
-```
- ⣴⡾⠛⠛⠖ ⢸⣿      ⣾⣿⡀  ⢸⣿⠛⠛⣷⡄                               ⢸⡇               
-⢸⣿     ⢸⣿     ⣸⡏⢹⣧  ⢸⣿⣀⣀⣾⠇ ⢠⣶⠟⠛⢷⣦ ⢸⣿⠛⠛⣷⡄ ⢸⣿⠛⠛⣷⣦ ⢠⣶⠟⠛⢷⣦ ⠘⠛⣿⡟⠛ ⢠⣶⠟⠛⢷⣦ ⣴⡟⠛⠛⢻⣦
-⠘⣿⣄  ⡀ ⢸⣿    ⢠⣿⠷⠶⢿⡆ ⢸⣿⠉⠉⣷⡆ ⢸⣿⣤⣤⠾⠃ ⢸⣿     ⢸⣿  ⢸⣿ ⢸⣿⣤⣤⠾⠃   ⢸⡇  ⢸⣿⣤⣤⠾⠃ ⣈⡛⠛⠛⣿⡆
- ⠈⠙⠛⠛⠉ ⠘⠛⠛⠛⠛  ⠚⠃ ⠘⠛ ⠘⠛⠛⠛⠋   ⠈⠙⠛⠛⠉ ⠘⠛     ⠘⠛  ⠘⠛  ⠈⠙⠛⠛⠉   ⠘⠛   ⠈⠙⠛⠛⠉ ⠈⠛⠛⠛⠛⠁
-```
-
-## Features
-
-- **Namespace Isolation:** Automatically encapsulates each lab in an isolated namespace named `lab-{name_of_lab}` stamped with privileged Pod Security Admission labels.
-- **ConfigMap Synthesis:** Local `startup-config` files referenced by nodes are safely read and created as ConfigMaps in the lab's namespace.
-- **File Mounting:** Injects `filesFromConfigMap` entries into the `Topology` CRD using the config's filename as the key.
-- **Core Node & Link Support:** Supports nodes (`kind`, `image`, `startup-config`, `exec`) and link `endpoints`.
-- **Familiar CLI Experience:** Uses `c9s deploy`, `c9s inspect`, and `c9s destroy`, auto-discovering `*.clab.yml` or `*.clab.yaml` in the current working directory, or accepting an explicit file with `-t / --topo`.
-- **Containerlab Aesthetics:** Terminal colors, braille ASCII logo banner, structured timestamped logs, and tabular node status summaries.
-- **Zero-Tolerance Safety Guards:**
-  - Automatically defaults to `kind-try-c9s` context if present.
-  - Prohibits mutating or deploying to the `default` or system namespaces.
-  - Strict path traversal defenses preventing startup-config breakout outside the topology directory.
+It translates Containerlab topology definition files (`*.clab.yml` or `*.clab.yaml`) into Clabernetes custom resources (`c9s.run/v1alpha1`), creates isolated Kubernetes namespaces (`lab-<name>`), handles configuration files, and manages the lifecycle of network lab environments.
 
 ## Installation
 
 ```bash
-# Build binary
-go build -o bin/c9s ./cmd/c9s
-
-# Install to user PATH
-cp bin/c9s ~/.local/bin/c9s
+go install github.com/andywhitaker/c9s/cmd/c9s@latest
 ```
 
-## Usage
+Or build from source:
 
-### 1. Version
 ```bash
-c9s version
+git clone https://github.com/andywhitaker/c9s.git
+cd c9s
+go build -o c9s ./cmd/c9s
 ```
 
-### 2. Deploy a Lab
+## Commands
+
+### `c9s deploy`
+Deploys a lab topology to Kubernetes.
+
 ```bash
-# Deploy with auto-discovery in current directory
+# Auto-discover topology file in current directory
 c9s deploy
 
-# Deploy specifying topology file explicitly
-c9s deploy -t examples/demo-lab/demo-lab.clab.yml
+# Specify topology file explicitly
+c9s deploy -t topo.clab.yml
 ```
 
-### 3. Inspect a Lab
+### `c9s inspect`
+Displays a summary table of deployed nodes, states, and assigned IP addresses (both external LoadBalancer and internal management IPs).
+
 ```bash
-# Inspect with auto-discovery in current directory
+# Inspect lab in current directory
 c9s inspect
 
-# Inspect specifying topology file explicitly
-c9s inspect -t examples/demo-lab/demo-lab.clab.yml
-
-# Inspect specifying lab name directly
+# Inspect a specific lab by name
 c9s inspect mytest
 
 # Inspect all deployed labs
 c9s inspect --all
 ```
 
-### 4. Destroy a Lab
+### `c9s connect`
+Connects directly to a lab node. By default, network OS nodes (SR Linux, Arista, Cisco, etc.) connect via SSH, while Linux nodes connect via `kubectl exec`.
+
 ```bash
-# Destroy with auto-discovery in current directory
+# Connect using default method (SSH for NOS, exec for Linux)
+c9s connect srl1
+
+# Specify username
+c9s connect admin@srl1
+c9s connect srl1 -u admin
+
+# Force connection method
+c9s connect srl1 --exec
+c9s connect client1 --ssh
+
+# Run a one-off command
+c9s connect client1 -- ps aux
+```
+
+### `c9s destroy`
+Tears down a deployed lab and removes its Kubernetes namespace.
+
+```bash
+# Destroy lab in current directory
 c9s destroy
 
-# Destroy specifying topology file explicitly
-c9s destroy -t examples/demo-lab/demo-lab.clab.yml
+# Destroy by topology file
+c9s destroy -t topo.clab.yml
+
+# Destroy by lab name
+c9s destroy mytest
 ```
+
+### `c9s version`
+Displays CLI version and build details.
+
+```bash
+c9s version
+```
+
+## Global Flags
+
+- `-t, --topo <file>`: Path to topology definition file
+- `--context <name>`: Kubernetes context to use (defaults to `kind-try-c9s` if present)
+- `--kubeconfig <path>`: Path to kubeconfig file
+- `--no-color`: Disable colored terminal output
+
+## License
+
+Apache-2.0

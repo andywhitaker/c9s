@@ -47,6 +47,9 @@ func init() {
 	if inspectCmd.Parent() == nil {
 		rootCmd.AddCommand(inspectCmd)
 	}
+	if connectCmd.Parent() == nil {
+		rootCmd.AddCommand(connectCmd)
+	}
 }
 
 func Execute() {

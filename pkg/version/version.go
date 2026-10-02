@@ -7,13 +7,13 @@ import (
 
 var (
 	// Version is the current version of the c9s CLI tool.
-	Version = "0.0.9"
+	Version = "0.0.1"
 	// Commit holds the git commit hash set at build time.
 	Commit = "unknown"
 	// Date holds the build timestamp set at build time.
 	Date = "unknown"
 	// Source is the upstream repository.
-	Source = "https://c9s.run"
+	Source = "https://github.com/andywhitaker/c9s"
 	// TargetGroup is the Kubernetes CRD group version.
 	TargetGroup = "c9s.run/v1alpha1"
 )
