@@ -5,7 +5,16 @@
 
 ## Installation
 
-Download pre-compiled binaries for Linux and macOS from the [Releases](https://github.com/andywhitaker/c9s/releases) page, or install via Go:
+Download the standalone binary for your platform directly from the [Releases](https://github.com/andywhitaker/c9s/releases) page:
+
+```bash
+# Example for Linux (x86_64)
+curl -sLO https://github.com/andywhitaker/c9s/releases/latest/download/c9s-linux-amd64
+chmod +x c9s-linux-amd64
+sudo mv c9s-linux-amd64 /usr/local/bin/c9s
+```
+
+Or install via Go:
 
 ```bash
 go install github.com/andywhitaker/c9s/cmd/c9s@latest

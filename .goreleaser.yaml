@@ -7,7 +7,7 @@ before:
 builds:
   - id: c9s
     main: ./cmd/c9s
-    binary: c9s
+    binary: c9s-{{ .Os }}-{{ .Arch }}
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,11 +24,8 @@ builds:
 
 archives:
   - id: default
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
-    files:
-      - README.md
-      - LICENSE*
+    format: binary
+    name_template: "{{ .Binary }}"
 
 checksum:
   name_template: "checksums.txt"
