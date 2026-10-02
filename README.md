@@ -5,6 +5,8 @@
 
 ## Installation
 
+Download pre-compiled binaries for Linux and macOS from the [Releases](https://github.com/andywhitaker/c9s/releases) page, or install via Go:
+
 ```bash
 go install github.com/andywhitaker/c9s/cmd/c9s@latest
 ```
