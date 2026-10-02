@@ -2,7 +2,6 @@
 
 `c9s` is a command-line tool for deploying and managing [Containerlab](https://containerlab.dev) topologies on Kubernetes using [Clabernetes](https://c9s.run).
 
-It translates Containerlab topology definition files (`*.clab.yml` or `*.clab.yaml`) into Clabernetes custom resources (`c9s.run/v1alpha1`), creates isolated Kubernetes namespaces (`lab-<name>`), handles configuration files, and manages the lifecycle of network lab environments.
 
 ## Installation
 
