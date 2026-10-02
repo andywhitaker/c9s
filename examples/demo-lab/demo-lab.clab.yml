@@ -1,0 +1,14 @@
+name: demo-lab
+topology:
+  nodes:
+    srl1:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux:26.3
+      startup-config: srl1.cfg
+    multitool:
+      kind: linux
+      image: ghcr.io/srl-labs/network-multitool:latest
+      exec:
+        - ip addr add 192.0.2.1/31 dev eth1
+  links:
+    - endpoints: ["srl1:e1-1", "multitool:eth1"]

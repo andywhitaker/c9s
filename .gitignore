@@ -1,0 +1,26 @@
+bin/
+.DS_Store
+*.log
+
+# Agent & AI tool metadata
+.agents/
+agents/
+.agent/
+.gemini/
+.antigravity/
+.agentdeck*
+.claude/
+.cursor/
+.system_generated/
+scratch/
+.tasks/
+*.tmp
+
+# Credentials & Kubeconfigs
+*kubeconfig*
+*.kubeconfig
+*.pem
+*.key
+*.crt
+.env
+.env.*
